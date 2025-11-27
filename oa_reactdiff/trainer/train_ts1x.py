@@ -21,7 +21,7 @@ from oa_reactdiff.model import EGNN, LEFTNet
 
 
 model_type = "leftnet"
-version = "0"
+version = "1"
 project = "OAReactDiff"
 # ---EGNNDynamics---
 egnn_config = dict(
@@ -184,6 +184,8 @@ earlystopping = EarlyStopping(
     verbose=True,
     log_rank_zero_only=True,
 )
+
+#回调=======================================
 checkpoint_callback = ModelCheckpoint(
     monitor="val-totloss",
     dirpath=ckpt_path,
@@ -195,8 +197,32 @@ checkpoint_callback = ModelCheckpoint(
     save_last=True,         # (可选建议) 额外保存最新的一个模型 (last.ckpt)，防止中断后没法续传
 )
 
+# 2. [新增] 保存 RMSD 最小的模型
+checkpoint_callback_rmsd = ModelCheckpoint(
+    monitor="val-rmsd",
+    dirpath=ckpt_path,
+    filename="best-rmsd-{epoch:03d}-{val-rmsd:.4f}",   # 文件名带上 rmsd 值
+    save_top_k=1,
+    mode="min",
+    # 注意: 虽然 RMSD 每 10 个 epoch 才算一次 (其他时候是 NaN)，
+    # Lightning 会自动处理: 只有当 metric 是有效数值且更优时才会保存。
+)
+
+# 3. [新增] 保存 RMSD 中位数最小的模型
+checkpoint_callback_median = ModelCheckpoint(
+    monitor="val-rmsd-median",
+    dirpath=ckpt_path,
+    filename="best-median-{epoch:03d}-{val-rmsd-median:.4f}",
+    save_top_k=1,
+    mode="min",
+)
+
 lr_monitor = LearningRateMonitor(logging_interval="step")
-callbacks = [earlystopping, checkpoint_callback, TQDMProgressBar(), lr_monitor]
+callbacks = [earlystopping, 
+        checkpoint_callback,
+        checkpoint_callback_rmsd,  # RMSD 最佳
+        checkpoint_callback_median,  # 中位数最佳
+        TQDMProgressBar(), lr_monitor]
 if training_config["ema"]:
     callbacks.append(EMACallback(decay=training_config["ema_decay"]))
 
