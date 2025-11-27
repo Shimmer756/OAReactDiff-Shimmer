@@ -476,9 +476,12 @@ class DDPMModule(LightningModule):
     ):
         if not self.clip_grad:
             return
-
+        #LYY修改，梯度改成硬裁剪    
         # Allow gradient norm to be 150% + 1.5 * stdev of the recent history.
-        max_grad_norm = 1.5 * self.gradnorm_queue.mean() + 3 * self.gradnorm_queue.std()
+        
+        #max_grad_norm = 1.5 * self.gradnorm_queue.mean() + 3 * self.gradnorm_queue.std()
+        
+        max_grad_norm = gradient_clip_val
 
         # Get current grad_norm
         params = [p for g in optimizer.param_groups for p in g["params"]]
