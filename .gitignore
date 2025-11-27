@@ -1,0 +1,24 @@
+
+# --- 忽略模型权重 ---
+checkpoint/
+*.ckpt
+pretrained-ts1x-diff.ckpt
+
+# --- 忽略训练日志 ---
+lightning_logs/
+wandb/
+
+# --- 忽略数据集 (根据您的 ls 结果) ---
+oa_reactdiff/data/
+oa_reactdiff/data_meci/
+data/
+data_meci/
+*.npz
+*.pkl
+*.h5
+
+# --- 忽略 Python 缓存与临时文件 ---
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
