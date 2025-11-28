@@ -18,7 +18,7 @@ from oa_reactdiff.diffusion._schedule import PredefinedNoiseSchedule, DiffSchedu
 
 
 # --- 1. 配置 ---
-MODEL_CHECKPOINT_PATH = "checkpoint/OAReactDiff/leftnet-0-20f22da4eb62/ddpm-epoch=1978-val-totloss=300.81.ckpt"
+MODEL_CHECKPOINT_PATH = "checkpoint/OAReactDiff/leftnet-1-0d69b68764ba/best-median-epoch=1899-val-rmsd-median=0.0692.ckpt"
 # 注意：这里使用的是原始的 pickle 数据集
 CUSTOM_DATA_PATH = Path("oa_reactdiff/data/transition1x/valid_addprop.pkl") 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,7 +29,7 @@ leftnet_config = dict(
     num_radial=96, 
     # 注意：如果您用的是官方预训练模型(5种原子)，这里应该是 8
     # 如果是您自己训练的(11种原子)，这里是 14。请根据实际 checkpoint 调整。
-    in_hidden_channels=14, 
+    in_hidden_channels=8, 
     reflect_equiv=True, legacy=True,
     update=True, pos_grad=False, single_layer_output=True, object_aware=True,
 )
@@ -128,7 +128,7 @@ def generate_single_molecule(ddpm_module, data_loader):
                 fragments_nodes=fragments_nodes,
                 conditions=conditions,
                 return_frames=1,
-                resamplings=3,
+                resamplings=10,
                 jump_length=1,
                 xh_fixed=xh_fixed,
                 frag_fixed=frag_fixed,
