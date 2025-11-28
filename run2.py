@@ -4,15 +4,23 @@ from pathlib import Path
 from typing import List
 from torch.utils.data import DataLoader
 
+from pymatgen.core import Molecule
+from oa_reactdiff.analyze.rmsd import pymatgen_rmsd
+
 # 导入项目模块
 from oa_reactdiff.trainer.pl_trainer import DDPMModule
 from oa_reactdiff.dataset.transition1x import ProcessedTS1x
 from oa_reactdiff.diffusion._normalizer import FEATURE_MAPPING
 
+
+# [🔥 核心修复] 添加这行导入
+from oa_reactdiff.diffusion._schedule import PredefinedNoiseSchedule, DiffSchedule
+
+
 # --- 1. 配置 ---
 MODEL_CHECKPOINT_PATH = "checkpoint/OAReactDiff/leftnet-0-20f22da4eb62/ddpm-epoch=1978-val-totloss=300.81.ckpt"
 # 注意：这里使用的是原始的 pickle 数据集
-CUSTOM_DATA_PATH = Path("oa_reactdiff/data/transition1x/train_addprop.pkl") 
+CUSTOM_DATA_PATH = Path("oa_reactdiff/data/transition1x/valid_addprop.pkl") 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # 必要的模型配置
@@ -30,13 +38,45 @@ leftnet_config = dict(
 inference_config = dict(
     datadir=str(CUSTOM_DATA_PATH), remove_h=False,
     bz=1,                 
-    num_workers=0, swapping_react_prod=False, single_frag_only=False,
-    clip_grad=False, gradient_clip_val=None, ema=False, ema_decay=0.999,
+    num_workers=0, 
+    swapping_react_prod=False, 
+    single_frag_only=False,
+    clip_grad=False, 
+    gradient_clip_val=None, 
+    ema=False, 
+    ema_decay=0.999,
+    # [🔥 核心修复] 必须与训练脚本 (train_ts1x.py) 中的设置完全一致！
+    noise_schedule="cosine",
+    timesteps=5000,
 )
 
 # --- 2. 核心生成函数 ---
 def generate_single_molecule(ddpm_module, data_loader):
     model = ddpm_module.ddpm.to(device)
+    
+    # ==========================================
+    # 🔥 核心修复：替换为验证时的采样时间表
+    # ==========================================
+    print("正在切换到推理时间表 (Polynomial_2, 150 steps)...")
+    
+    # 1. 创建新的 Gamma 模块 (Poly2, 150步)
+    sampling_gamma = PredefinedNoiseSchedule(
+        noise_schedule="polynomial_2",
+        timesteps=150,
+        precision=1e-5,
+    ).to(device)
+    
+    # 2. 创建新的 Schedule 并覆盖模型
+    sampling_schedule = DiffSchedule(
+        gamma_module=sampling_gamma,
+        norm_values=model.normalizer.norm_values
+    )
+    
+    # 3. 强制替换模型的 schedule 和 T
+    model.schedule = sampling_schedule
+    model.T = 150
+    # ==========================================
+
     model.eval()
 
     print(f"🚀 开始生成单个分子...")
@@ -88,7 +128,7 @@ def generate_single_molecule(ddpm_module, data_loader):
                 fragments_nodes=fragments_nodes,
                 conditions=conditions,
                 return_frames=1,
-                resamplings=10,
+                resamplings=3,
                 jump_length=1,
                 xh_fixed=xh_fixed,
                 frag_fixed=frag_fixed,
@@ -109,6 +149,54 @@ def generate_single_molecule(ddpm_module, data_loader):
         diff = np.abs(gen_TS_pos[:5] - gt_TS_pos[:5])
         print(f"\n[坐标差异 (Abs Diff)] 前 5 行:")
         print(diff)
+        
+
+        # =========================================================
+        # 👇👇👇 在这里插入您的新代码 (替换掉原来的简单 diff 计算) 👇👇👇
+        # =========================================================
+        
+        # 定义辅助函数 (也可以放在文件外面)
+        def tensor_to_mol(pos, charges):
+            return Molecule(
+                species=charges.flatten().cpu().long().numpy(),
+                coords=pos.cpu().numpy()
+            )
+
+        # 1. 构造分子对象
+        # gen_TS_tensor 的最后一列 (-1) 是电荷，前3列 (:3) 是坐标
+        mol_gen = tensor_to_mol(
+            gen_TS_tensor[:, :3], 
+            gen_TS_tensor[:, -1]
+        )
+
+        # 真实数据在 representations[1] 中
+        mol_true = tensor_to_mol(
+            representations[1]['pos'], 
+            representations[1]['charge']
+        )
+
+        # 2. 计算对齐后的 RMSD
+        try:
+            print("\n====== 📐 正在进行 Kabsch 对齐与计算... ======")
+            # pymatgen_rmsd 会自动处理旋转和平移对齐
+            real_rmsd = pymatgen_rmsd(mol_gen, mol_true, ignore_chirality=True)
+            
+            print(f"✅ 对齐后的真实 RMSD: {real_rmsd:.4f} Å")
+            
+            if real_rmsd < 0.5:
+                print(">> 结果判定: 🌟 非常准确 (Excellent)")
+            elif real_rmsd < 1.0:
+                print(">> 结果判定: 👍 结构合理 (Good)")
+            else:
+                print(">> 结果判定: ⚠️ 偏差较大 (Poor)")
+                
+        except Exception as e:
+            print(f"❌ RMSD 计算出错: {e}")
+            
+        # =========================================================
+        # 👆👆👆 插入结束 👆👆👆
+        # =========================================================
+
 
         # 退出循环
         break
@@ -122,6 +210,10 @@ if __name__ == "__main__":
         map_location=device,
         model_config=leftnet_config,
         training_config=inference_config,
+
+        # [🔥 核心修复] 显式覆盖 __init__ 的默认值
+        noise_schedule=inference_config["noise_schedule"],
+        timesteps=inference_config["timesteps"],
     )
 
     print("正在加载数据...")

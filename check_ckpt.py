@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 # 1. 配置您的 Checkpoint 路径
-CKPT_PATH = "checkpoint/OAReactDiff/leftnet-0-20f22da4eb62/ddpm-epoch=1978-val-totloss=300.81.ckpt"
+CKPT_PATH = "checkpoint/OAReactDiff/leftnet-1-0d69b68764ba/last.ckpt"
 
 def inspect_ckpt(path):
     print(f"📂 正在加载检查点: {path}")
