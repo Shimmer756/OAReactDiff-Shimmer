@@ -46,7 +46,7 @@ FILE_TYPE = {
     "DoubleQM9": ".npz",
     "TripleQM9": ".npz",
     "TS1x": ".pkl",
-    "MECI": ".pkl",
+    "MECI": ".npz",
 }
 LR_SCHEDULER = {
     "cos": CosineAnnealingWarmRestarts,
@@ -351,7 +351,7 @@ class DDPMModule(LightningModule):
         jump_length: int = 5,
         #frag_fixed: List = [0, 2],
         frag_fixed: List = [0], #LYY修改
-    )
+        ):
         sampling_ddpm = copy.deepcopy(self.ddpm)
         sampling_ddpm.schedule = self.sampling_schedule
         sampling_ddpm.T = self.sampling_schedule.gamma_module.timesteps

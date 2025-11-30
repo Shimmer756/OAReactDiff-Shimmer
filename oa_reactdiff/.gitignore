@@ -10,9 +10,9 @@ wandb/
 
 # --- 忽略数据集 (根据您的 ls 结果) ---
 oa_reactdiff/data/
-oa_reactdiff/data_meci/
+#oa_reactdiff/data_meci/
 data/
-data_meci/
+#data_meci/
 *.npz
 *.pkl
 *.h5
