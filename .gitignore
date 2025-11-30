@@ -12,7 +12,7 @@ wandb/
 oa_reactdiff/data/
 
 data/
-data_meci/
+
 *.npz
 *.pkl
 *.h5
