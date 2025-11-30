@@ -39,12 +39,14 @@ PROCESS_FUNC = {
     "DoubleQM9": ProcessedDoubleQM9,
     "TripleQM9": ProcessedTripleQM9,
     "TS1x": ProcessedTS1x,
+    "MECI": ProcessedTS1x, #复用TS1x
 }
 FILE_TYPE = {
     "QM9": ".npz",
     "DoubleQM9": ".npz",
     "TripleQM9": ".npz",
     "TS1x": ".pkl",
+    "MECI": ".pkl",
 }
 LR_SCHEDULER = {
     "cos": CosineAnnealingWarmRestarts,
@@ -77,7 +79,7 @@ class DDPMModule(LightningModule):
         process_type: Optional[str] = None,
         model: nn.Module = None,
         enforce_same_encoding: Optional[List] = None,
-        scales: List[float] = [1.0, 2.0 , 1.0], #修改位置
+        scales: List[float] = [1.0, 0.0 , 1.0], #LYY修改位置
         eval_epochs: int = 20,
         source: Optional[Dict] = None,
         fixed_idx: Optional[List] = None,
@@ -210,12 +212,13 @@ class DDPMModule(LightningModule):
         '''
         if stage == "fit":
             self.train_dataset = func(
-                Path(self.training_config["datadir"], f"train_addprop{ft}"),
+                #Path(self.training_config["datadir"], f"train_addprop{ft}"),
+                Path(self.training_config["datadir"], f"train_meci{ft}"),
                 **self.training_config,
             )
             self.training_config["reflection"] = False  # Turn off reflection in val.
             self.val_dataset = func(
-                Path(self.training_config["datadir"], f"valid_addprop{ft}"),
+                Path(self.training_config["datadir"], f"valid_meci{ft}"),
                 **self.training_config,
             )
         elif stage == "test":
@@ -346,9 +349,9 @@ class DDPMModule(LightningModule):
         batch: List,
         resamplings: int = 5,
         jump_length: int = 5,
-        frag_fixed: List = [0, 2],
-        #frag_fixed: List = [0], #LYY修改
-    ):
+        #frag_fixed: List = [0, 2],
+        frag_fixed: List = [0], #LYY修改
+    )
         sampling_ddpm = copy.deepcopy(self.ddpm)
         sampling_ddpm.schedule = self.sampling_schedule
         sampling_ddpm.T = self.sampling_schedule.gamma_module.timesteps
@@ -380,7 +383,7 @@ class DDPMModule(LightningModule):
             fragments_nodes,
             out_samples[0],
             xh_fixed,
-            idx=1,
+            idx=2,
             threshold=0.5,
         )
 

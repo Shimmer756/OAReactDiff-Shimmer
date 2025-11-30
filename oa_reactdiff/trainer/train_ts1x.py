@@ -21,8 +21,8 @@ from oa_reactdiff.model import EGNN, LEFTNet
 
 
 model_type = "leftnet"
-version = "1"
-project = "OAReactDiff"
+version = "0"
+project = "OA_Diff_MECI"
 # ---EGNNDynamics---
 egnn_config = dict(
     in_node_nf=8,  # embedded dim before injecting to egnn
@@ -77,7 +77,8 @@ optimizer_config = dict(
 T_0 = 200
 T_mult = 2
 training_config = dict(
-    datadir="./oa_reactdiff/data/transition1x/",
+    #datadir="./oa_reactdiff/data/transition1x/",
+    datadir="./oa_reactdiff/data_meci/", #LYY修改1
     remove_h=False,
     bz=4,
     num_workers=0,
@@ -101,7 +102,7 @@ training_config = dict(
 )
 training_data_frac = 1.0
 
-node_nfs: List[int] = [9] * 3  # 3 (pos) + 11 (cat) + 1 (charge)
+node_nfs: List[int] = [9] * 3  # 3 (pos) + 5 (cat) + 1 (charge)
 edge_nf: int = 0  # edge type
 condition_nf: int = 1
 fragment_names: List[str] = ["R", "TS", "P"]
@@ -111,9 +112,9 @@ condition_time: bool = True
 edge_cutoff: Optional[float] = None
 loss_type = "l2"
 pos_only = True
-process_type = "TS1x"
+process_type = "MECI" #LYY修改
 enforce_same_encoding = None
-scales = [1.0, 2.0, 1.0]
+scales = [1.0, 0.0, 1.0] #LYY修改
 fixed_idx: Optional[List] = None
 eval_epochs = 10
 
