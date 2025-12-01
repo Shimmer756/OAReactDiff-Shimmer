@@ -21,8 +21,8 @@ from oa_reactdiff.model import EGNN, LEFTNet
 
 
 model_type = "leftnet"
-version = "1"
-project = "OAReactDiff"
+version = "0"
+project = "OAReactDiff_R2TS"
 # ---EGNNDynamics---
 egnn_config = dict(
     in_node_nf=8,  # embedded dim before injecting to egnn
@@ -113,7 +113,7 @@ loss_type = "l2"
 pos_only = True
 process_type = "TS1x"
 enforce_same_encoding = None
-scales = [1.0, 2.0, 1.0]
+scales = [1.0, 1.0, 0.0]
 fixed_idx: Optional[List] = None
 eval_epochs = 10
 

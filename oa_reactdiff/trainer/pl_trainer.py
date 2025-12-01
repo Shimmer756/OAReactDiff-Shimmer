@@ -77,7 +77,7 @@ class DDPMModule(LightningModule):
         process_type: Optional[str] = None,
         model: nn.Module = None,
         enforce_same_encoding: Optional[List] = None,
-        scales: List[float] = [1.0, 2.0 , 1.0], #修改位置
+        scales: List[float] = [1.0, 1.0 , 0.0], #修改位置
         eval_epochs: int = 20,
         source: Optional[Dict] = None,
         fixed_idx: Optional[List] = None,
@@ -346,7 +346,8 @@ class DDPMModule(LightningModule):
         batch: List,
         resamplings: int = 5,
         jump_length: int = 5,
-        frag_fixed: List = [0, 2],
+        frag_fixed: List = [0, 1],
+        #frag_fixed: List = [0, 2],
         #frag_fixed: List = [0], #LYY修改
     ):
         sampling_ddpm = copy.deepcopy(self.ddpm)
