@@ -346,9 +346,8 @@ class DDPMModule(LightningModule):
         batch: List,
         resamplings: int = 5,
         jump_length: int = 5,
-        frag_fixed: List = [0, 1],
         #frag_fixed: List = [0, 2],
-        #frag_fixed: List = [0], #LYY修改
+        frag_fixed: List = [0], 
     ):
         sampling_ddpm = copy.deepcopy(self.ddpm)
         sampling_ddpm.schedule = self.sampling_schedule
