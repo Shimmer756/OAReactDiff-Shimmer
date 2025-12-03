@@ -152,6 +152,10 @@ class DDPMModule(LightningModule):
             self.gradnorm_queue.add(3000)
         self.save_hyperparameters()
 
+        # === 【新增】初始化输出存储列表 ===
+        self.training_step_outputs = []
+        self.validation_step_outputs = []
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.ddpm.parameters(),
@@ -413,6 +417,7 @@ class DDPMModule(LightningModule):
         else:
             info["rmsd"], info["rmsd-median"] = np.nan, np.nan
         info["loss"] = loss
+
         return info
 
     @torch.no_grad()
@@ -1092,6 +1097,10 @@ class SBModule(LightningModule):
         else:
             for k in self.eval_keys:
                 info[k] = np.nan
+
+        # === [新增] 手动收集输出 ===
+        self.train_step_outputs.append(info)
+
         return info
 
     @torch.no_grad()
@@ -1114,13 +1123,17 @@ class SBModule(LightningModule):
         return ip
 
     def validation_step(self, batch, batch_idx, *args):
-        return self._shared_eval(batch, batch_idx, "val", *args)
+        # === [修改] 依照你的实例 ===
+        va_sp_output = self._shared_eval(batch, batch_idx, "val", *args)
+        # 手动收集输出
+        self.val_step_outputs.append(va_sp_output)
+        return va_sp_output
 
     def test_step(self, batch, batch_idx, *args):
         return self._shared_eval(batch, batch_idx, "test", *args)
 
-    def validation_epoch_end(self, val_step_outputs):
-        val_epoch_metrics = average_over_batch_metrics(val_step_outputs)
+    def on_validation_epoch_end(self):
+        val_epoch_metrics = average_over_batch_metrics(self.val_step_outputs)
         if self.trainer.is_global_zero:
             pretty_print(self.current_epoch, val_epoch_metrics, prefix="val")
         val_epoch_metrics.update({"epoch": self.current_epoch})
@@ -1138,11 +1151,19 @@ class SBModule(LightningModule):
             self.log("val_ep_rmsd_mean", float(rmsds_mean), sync_dist=True)
             self.log("val_ep_rmsd_median", float(rmsds_median), sync_dist=True)
             self.log("val_ep_rmsd_std", float(rmsds_std), sync_dist=True)
+            
+            # === [关键] 清空列表释放内存 ===
+        self.val_step_outputs.clear()
 
-    def training_epoch_end(self, outputs) -> None:
-        epoch_metrics = average_over_batch_metrics(outputs, allowed=self.eval_keys)
+    def on_train_epoch_end(self) -> None:
+        # 使用 self.train_step_outputs
+        epoch_metrics = average_over_batch_metrics(self.train_step_outputs, allowed=self.eval_keys)
+
         for k, v in epoch_metrics.items():
             self.log(f"tr_{k}", v, sync_dist=True)
+
+        # === [关键] 清空列表释放内存 ===
+        self.train_step_outputs.clear()
 
     def configure_gradient_clipping(
         self,

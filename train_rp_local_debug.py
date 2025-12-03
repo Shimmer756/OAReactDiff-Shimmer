@@ -186,12 +186,17 @@ def main():
         training_config=dict(
             datadir=cfg.datadir, bz=cfg.batch_size, num_workers=0, # 0 workers for local debug
             ema=False, swapping_react_prod=False, # 调试关闭 EMA 和 Swap
-            sampler_config=dict(mode="node^2", shuffle=True)
+            sampler_config=dict(mode="node^2", shuffle=True),
+            remove_h=False, #LYY
+            clip_grad=True,           # <--- 【本次修复】是否裁剪梯度
+            lr_schedule_type=None,    # <--- 【预防性修复】避免下一步报 lr 调度器错误
         ),
         node_nfs=[9, 9], fragment_names=["R", "P"],
         pos_dim=3, condition_nf=1, 
         norm_values=(1., 1., 1.), norm_biases=(0., 0., 0.),
         loss_type="l2", pos_only=True,
+        # 【关键修复】必须显式指定处理类型为 TS1x，否则默认找 .npz 文件
+        process_type="TS1x",
         model=LEFTNet,
         fixed_idx=[0],      # 固定 R(0)
         idx=1,              # 预测 P(1)
