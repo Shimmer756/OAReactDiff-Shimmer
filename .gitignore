@@ -12,6 +12,7 @@ reactot/data/
 reactot/data_meci/
 inp_xyzs/
 logs/
+logs_local_debug/
 wandb/
 lightning_logs/
 checkpoint/
@@ -26,5 +27,6 @@ venv/
 .vscode/
 A/
 *.log
+
 tmp/
 reactot/13131875.zip
