@@ -129,6 +129,9 @@ class EnSB(nn.Module):
             cond = {
                 "hs": torch.stack([r_other, p_other]), # (2, n_atoms, 6) TODO r_other == p_other == t_other can be pruned out?
                 "r_pos": r_pos.detach(),
+                # === [必须补上这一行] ===
+                "p_pos": p_pos.detach(),  # <--- 加上这个！
+                # =======================
             }
             fragments_nodes = [r_size, p_size]
             x0_size, x0_other = p_size, p_other # for eval

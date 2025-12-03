@@ -248,9 +248,17 @@ class DDPMModule(LightningModule):
         representations, conditions = batch
 
         # [新增] 如果是 R->P 任务且数据包含 3 部分，强制剔除中间的 TS (index 1)
+        # === [调试打印] 确认代码已更新 ===
+        # print(f"DEBUG: Input len={len(representations)}, Mapping={self.ddpm.mapping}")
+
+        # === [核心修复] 过滤数据 ===
+        # 只要是 R->P 模式且数据有3份，就强行剔除中间的 TS
         if self.ddpm.mapping == "R->P" and len(representations) == 3:
             representations = [representations[0], representations[2]]
+        
+        # =========================
 
+        # 这一行原本是 1010，现在应该被挤下去了
         loss_terms = self.ddpm.forward(
             representations,
             conditions,
@@ -859,6 +867,10 @@ class SBModule(LightningModule):
             self.gradnorm_queue.add(3000)
         self.save_hyperparameters()
 
+        # === [必须补上这两行] ===
+        # 初始化用于收集输出的空列表
+        self.train_step_outputs = []
+        self.val_step_outputs = []
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -1007,6 +1019,30 @@ class SBModule(LightningModule):
 
     def compute_loss(self, batch):
         representations, conditions = batch
+
+        # === [强制打印调试信息] ===
+        # 我们需要看看到底是什么值导致 if 判断失败
+        mapping_mode = getattr(self.ddpm, 'mapping', 'Unknown')
+        data_len = len(representations)
+        model_frags = self.n_fragments # SBModule 里的属性
+        
+        print(f"\n[DEBUG] 正在检查数据过滤条件:")
+        print(f"  > Mapping模式: '{mapping_mode}'")
+        print(f"  > 输入数据片段数: {data_len}")
+        print(f"  > 模型预设片段数: {model_frags}")
+        
+        # === [过滤逻辑] ===
+        # 只要输入比模型需要的多，就尝试过滤
+        if data_len == 3 and model_frags == 2:
+            print("  > ✅ 条件满足，正在剔除中间的 TS...")
+            representations = [representations[0], representations[2]]
+        elif mapping_mode == "R->P" and data_len == 3:
+            print("  > ✅ 检测到 R->P 模式，正在剔除 TS...")
+            representations = [representations[0], representations[2]]
+        else:
+            print("  > ⚠️ 未触发过滤，直接透传数据。")
+        # =========================
+
         loss_terms = self.ddpm.forward(
             representations,
             conditions,
@@ -1034,12 +1070,22 @@ class SBModule(LightningModule):
         self.ddpm.eval()
 
         representations, conditions = batch
+
+        # === [核心修复] 同样在这里过滤数据 ===
+        if self.ddpm.mapping == "R->P" and len(representations) == 3:
+            representations = [representations[0], representations[2]]
+        # =================================
+
         x0, x1, cond, x0_size, x0_other = self.ddpm.sample_batch(
             representations, conditions, return_timesteps=False, training=False)
 
         with torch.no_grad():
             xs, pred_x0 = self.ddpm.sample(
                 x1, representations, conditions, nfe=self.nfe, ot_ode=self.ot_ode)
+            
+            # 注意：这里的 compute_loss 已经在上面被修复了，所以传入原始 batch 也没事
+            # 但为了保险，我们可以传入过滤后的
+            filtered_batch = (representations, conditions)
             info = self.compute_loss(batch)
         x0_pred = xs[:, 0, ...]
 
@@ -1178,7 +1224,7 @@ class SBModule(LightningModule):
     def configure_gradient_clipping(
         self,
         optimizer,
-        optimizer_idx,
+        #optimizer_idx,
         gradient_clip_val,
         gradient_clip_algorithm
     ):

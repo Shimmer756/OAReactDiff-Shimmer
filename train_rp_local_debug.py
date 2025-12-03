@@ -22,7 +22,8 @@ class Config:
 # 优化器参数
 class OPT:
     def __init__(self):
-        self.solver = "ode"
+        #self.solver = "ode"
+        self.solver = "ddpm"
         self.method = "midpoint"
         self.atol = 1e-3 # 本地调试精度可以稍微放宽
         self.rtol = 1e-3
@@ -54,81 +55,55 @@ class SingleSampleCheckCallback(Callback):
         
         # 从 dataloader 取出第一批数据
         dataloader = trainer.train_dataloader
-        batch = next(iter(dataloader))
+        # 注意：这里拿到的 batch 是一个 tuple: (list_of_dicts, tensor_condition)
+        batch_raw = next(iter(dataloader))
         
-        # 2. 将数据移动到设备
-        # SBModule 的处理逻辑比较复杂，这里模拟 pl_trainer 里的处理
-        # 转换 PyG Batch 到模型需要的 list of dict
-        # 注意: 这里简化处理，直接调用 pl_module 内部的数据处理逻辑可能较难，
-        # 我们直接利用 pl_module.forward 里的解包逻辑
+        # 2. 手动将数据移动到 GPU
+        representations_raw, conditions = batch_raw
         
-        # 为了方便，我们直接手动从 batch 中提取我们需要的信息
-        # batch 是一个 PyG Data 对象
-        #我们需要构建 representations list
-        # 这是一个 hacky 但有效的方法，模拟 dataset.collate 的逆过程
-        # 但 SBModule 的输入通常已经是 List[Dict] (如果用自定义 collate) 或者 PyG Batch
-        # 让我们直接利用 pl_module.eval_sample_batch 接口，它能处理这些细节
+        # 移动 conditions
+        conditions = conditions.to(device)
         
-        # 将 batch 移到 GPU
-        batch = batch.to(device)
+        # 移动 representations (列表中的每个字典里的每个Tensor)
+        representations = []
+        for rep in representations_raw:
+            new_rep = {}
+            for k, v in rep.items():
+                if isinstance(v, torch.Tensor):
+                    new_rep[k] = v.to(device)
+                else:
+                    new_rep[k] = v
+            representations.append(new_rep)
+
+        batch = (representations, conditions)
         
         # 3. 运行生成 (Inference)
         with torch.no_grad():
-            # 条件输入 (在 R->P 任务中通常是全 0 或 dummy)
-            conditions = torch.zeros(batch.num_graphs, 1, dtype=torch.long, device=device)
-            
-            # 调用 React-OT 的评估接口
-            # eval_sample_batch 会自动识别 mapping="R->P"
-            # 返回: r_pos, p_pred_pos, p_true_pos, ...
-            print(f"🚀 正在使用 ODE 求解器 (NFE={pl_module.nfe}) 生成结构...")
-            r_pos, _, p_pos, x0_size, x0_other, rmsds = pl_module.eval_sample_batch(
-                (batch, conditions),
-                return_all=True
+            print(f"🚀 正在生成结构...")
+            # eval_sample_batch 内部会自动处理 R->P 的过滤逻辑（因为我们之前修好了）
+            res = pl_module.eval_sample_batch(
+                batch,
+                return_rmsd=True,
+                return_all=True # 我们需要坐标数据
             )
             
-            # 注意：在 R->P 模式下，eval_sample_batch 的返回值对应关系会发生变化
-            # 查看 pl_trainer.py:
-            # outputs = self.ddpm.sample(...)
-            # 如果是 R->P, xs (轨迹) 的终点是 P_pred
-            # 我们直接拿 p_pos (这是模型生成的) 和 batch 中的真实 P 对比
+            # 解包结果 (根据 eval_sample_batch 的 return_all 逻辑)
+            # return: r_pos, x0_pred, p_pos, x0_size, x0_other, rmsds
+            r_pos, p_pred, p_true, _, _, rmsds = res
             
-            # *修正*: eval_sample_batch 返回的通常是 (Start, End_Pred, End_True)
-            # 在 R->P 模式下:
-            #   r_pos  -> Start (R)
-            #   ts_pos -> End Pred (P_pred)  <-- 变量名虽叫 ts_pos，实际是中间/生成项
-            #   p_pos  -> End True (P_true)  <-- 变量名虽叫 p_pos，实际是目标项
-            # 让我们通过打印 shape 来确认，或者直接看 RMSD
-            
-            p_pred = _ # 待确认，暂取中间项
-            p_true = _ # 待确认，暂取最后项
-            
-            # 由于 eval_sample_batch 内部逻辑复杂，我们直接信任它返回的 `rmsds`
-            # 它内部已经计算了 生成值 vs 真实值 的 RMSD
-            
-            final_rmsd = rmsds.mean().item()
+            final_rmsd = np.mean(rmsds)
             print(f"\n✅ 测试完成！")
             print(f"📉 当前 Batch 平均 RMSD: {final_rmsd:.4f} Å")
             
-            # 4. 打印第一个分子的坐标对比
+            # 4. 打印坐标对比
             print("\n📝 --- 单个分子坐标对比 (前5个原子) ---")
+            # 提取第一个分子的数据范围
+            # r_pos 已经是 tensor 了
+            n_atoms = representations[0]["size"][0].item() # 获取第一个分子的原子数
             
-            # 提取第一个分子的数据
-            # r_pos, p_pred, p_true 都是 (N_total, 3) 的 tensor
-            # 我们只看第一个分子
-            n_atoms = batch.ptr[1] - batch.ptr[0]
-            start = batch.ptr[0]
-            end = batch.ptr[1]
-            
-            # 根据 pl_trainer.py 的逻辑:
-            # returns: x0_out, x1_out, x0_true ...
-            # x0 是终点(P), x1 是起点(R)
-            # eval_sample_batch 返回: x1_out, x0_out, x0_true
-            # 对应: R, P_pred, P_true
-            
-            coords_R = r_pos[start:end].cpu().numpy()
-            coords_P_pred = _[start:end].cpu().numpy() # 中间那个返回值
-            coords_P_true = p_pos[start:end].cpu().numpy()
-            
+            coords_P_true = p_true[:n_atoms].cpu().numpy()
+            coords_P_pred = p_pred[:n_atoms].cpu().numpy()
+
             # 手动再算一次 RMSD 验证
             my_rmsd = kabsch_rmsd(coords_P_pred, coords_P_true)
             print(f"🔍 样本 0 手动计算 RMSD: {my_rmsd:.4f} Å")
@@ -204,7 +179,10 @@ def main():
         mapping_initial="R",
         nfe=cfg.nfe,
         ot_ode=True,
-        timesteps=1000
+        timesteps=1000,
+        # === 【必须补上这一行】 ===
+        power=0.5,   # 这里的 0.5 对应恒定 Beta 调度，也是预训练模型的设置
+        # =======================
     )
     
     # 3. 加载权重
