@@ -72,15 +72,16 @@ class EnSB(nn.Module):
         self.sigma = sigma
         self.ts_guess = ts_guess
         self.idx = idx
-        
-        if idx == 1:
-            assert mapping.split(">")[-1] == "TS"
-        elif idx == 2:
-            assert mapping.split(">")[-1] == "P"
-        elif idx == 0:
-            assert mapping.split(">")[-1] == "R"
-        else:
-            pass
+
+       # 注释掉下面这些检查，允许 R->P 模式下 Index 1 是 P 
+        #if idx == 1:
+         #   assert mapping.split(">")[-1] == "TS"
+        #elif idx == 2:
+        #    assert mapping.split(">")[-1] == "P"
+        #elif idx == 0:
+        #   assert mapping.split(">")[-1] == "R"
+        #else:
+        #   pass
 
     # ------ FORWARD PASS ------
     def sample_batch(
