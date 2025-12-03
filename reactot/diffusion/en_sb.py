@@ -103,9 +103,25 @@ class EnSB(nn.Module):
             other = torch.cat([features["one_hot"], features["charge"]], dim=1).float()
             return pos, size, other
 
+        # 原代码 (约 92-94 行)
+        #r_pos, r_size, r_other = parse_features(representations[0]) # index 0
+        #t_pos, t_size, t_other = parse_features(representations[1]) # index 1
+        #p_pos, p_size, p_other = parse_features(representations[2]) # index 2
+
+        # === 修改后 (替换这三行) ===
         r_pos, r_size, r_other = parse_features(representations[0]) # index 0
-        t_pos, t_size, t_other = parse_features(representations[1]) # index 1
-        p_pos, p_size, p_other = parse_features(representations[2]) # index 2
+        
+        # 动态适配 R->P 任务 (只有两个输入)
+        if self.mapping == "R->P" and len(representations) == 2:
+            # 此时 representations[1] 就是 P
+            p_pos, p_size, p_other = parse_features(representations[1])
+            # TS 设为 None 或 dummy
+            t_pos, t_size, t_other = None, None, None 
+        else:
+            # 正常模式 (R, TS, P)
+            t_pos, t_size, t_other = parse_features(representations[1])
+            p_pos, p_size, p_other = parse_features(representations[2])
+
 
         if self.mapping == "R->P":
             x1 = r_pos

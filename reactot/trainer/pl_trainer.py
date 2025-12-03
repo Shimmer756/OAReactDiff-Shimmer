@@ -246,6 +246,11 @@ class DDPMModule(LightningModule):
 
     def compute_loss(self, batch):
         representations, conditions = batch
+
+        # [新增] 如果是 R->P 任务且数据包含 3 部分，强制剔除中间的 TS (index 1)
+        if self.ddpm.mapping == "R->P" and len(representations) == 3:
+            representations = [representations[0], representations[2]]
+
         loss_terms = self.ddpm.forward(
             representations,
             conditions,
@@ -329,6 +334,11 @@ class DDPMModule(LightningModule):
         sampling_ddpm.eval()
 
         representations, conditions = batch
+
+        # [新增] 同样在这里过滤数据
+        if self.ddpm.mapping == "R->P" and len(representations) == 3:
+            representations = [representations[0], representations[2]]
+
         xh_fixed = [
             torch.cat(
                 [repre[feature_type] for feature_type in FEATURE_MAPPING],
