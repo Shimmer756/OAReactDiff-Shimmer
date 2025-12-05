@@ -1026,18 +1026,18 @@ class SBModule(LightningModule):
         data_len = len(representations)
         model_frags = self.n_fragments # SBModule 里的属性
         
-        print(f"\n[DEBUG] 正在检查数据过滤条件:")
-        print(f"  > Mapping模式: '{mapping_mode}'")
-        print(f"  > 输入数据片段数: {data_len}")
-        print(f"  > 模型预设片段数: {model_frags}")
+        #print(f"\n[DEBUG] 正在检查数据过滤条件:")
+        #print(f"  > Mapping模式: '{mapping_mode}'")
+        #print(f"  > 输入数据片段数: {data_len}")
+        #print(f"  > 模型预设片段数: {model_frags}")
         
         # === [过滤逻辑] ===
         # 只要输入比模型需要的多，就尝试过滤
         if data_len == 3 and model_frags == 2:
-            print("  > ✅ 条件满足，正在剔除中间的 TS...")
+            #print("  > ✅ 条件满足，正在剔除中间的 TS...")
             representations = [representations[0], representations[2]]
         elif mapping_mode == "R->P" and data_len == 3:
-            print("  > ✅ 检测到 R->P 模式，正在剔除 TS...")
+            #print("  > ✅ 检测到 R->P 模式，正在剔除 TS...")
             representations = [representations[0], representations[2]]
         else:
             print("  > ⚠️ 未触发过滤，直接透传数据。")

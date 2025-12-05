@@ -5,15 +5,37 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.strategies.ddp import DDPStrategy
+from pytorch_lightning import Callback ##LYY
 
 from reactot.trainer.pl_trainer import SBModule, DDPMModule
 from reactot.trainer.ema import EMACallback
 from reactot.model import LEFTNet
 
+
+class PrintMetricsCallback(Callback):
+    def on_validation_epoch_end(self, trainer, pl_module):
+        # 获取当前 Epoch 的指标
+        metrics = trainer.callback_metrics
+        epoch = trainer.current_epoch
+
+        # 提取关键指标 (如果存在)
+        val_loss = metrics.get("val_ep_loss", "N/A")
+        val_err = metrics.get("val_ep_scaled_err", "N/A")
+        val_rmsd = metrics.get("val_ep_rmsd_mean", "N/A")
+
+        # 格式化打印
+        print(f"\n[Epoch {epoch}] -----------------------------")
+        print(f"  📉 Val Loss:        {val_loss:.6f}" if isinstance(val_loss, float) else f"  Val Loss: {val_loss}")
+        print(f"  🎯 Val Scaled Err:  {val_err:.6f}" if isinstance(val_err, float) else f"  Val Scaled Err: {val_err}")
+        print(f"  📏 Val Mean RMSD:   {val_rmsd:.6f}" if isinstance(val_rmsd, float) else f"  Val RMSD: {val_rmsd}")
+        print("------------------------------------------\n")
+
+
 # === 1. 配置区域 ===
 class OPT:
     def __init__(self):
-        self.solver = "ode"
+        # 【关键配置】使用 ddpm 求解器配合 ot_ode=True，这是最稳健的组合
+        self.solver = "ddpm"   
         self.method = "midpoint"
         self.atol = 1e-2
         self.rtol = 1e-2
@@ -34,19 +56,21 @@ leftnet_config = dict(
     object_aware=True,
 )
 
-optimizer_config = dict(lr=1e-4, betas=[0.9, 0.999], weight_decay=0, amsgrad=True)
+optimizer_config = dict(lr=1e-5, betas=[0.9, 0.999], weight_decay=0, amsgrad=True)
 
 # 训练配置
 training_config = dict(
-    datadir="reactot/data/transition1x/", # 请确保这里指向你的数据目录
+    # 【关键配置】指向你转换好的数据目录
+    datadir="reactot/data_meci/", 
+    
     remove_h=False,
-    bz=14,
-    num_workers=0,
+    bz=4,  # 如果显存够大，可以尝试调大到 32 或 64
+    num_workers=0, # 服务器上建议开启多进程读取 (例如 4 或 8)
     clip_grad=True,
     gradient_clip_val=None,
     ema=True,
     ema_decay=0.999,
-    swapping_react_prod=False, # R->P 是有方向的，建议关闭交换
+    swapping_react_prod=False, # R->P 是有方向的，必须关闭交换
     append_frag=False,
     use_by_ind=True,
     reflection=False,
@@ -57,7 +81,7 @@ training_config = dict(
     sampler_config=dict(max_num=2800, mode="node^2", shuffle=True, ddp=False)
 )
 
-# === 关键修改：针对 R->P 任务的配置 ===
+# === 针对 R->P 任务的配置 ===
 fragment_names = ["R", "P"]  # 只保留 R 和 P
 node_nfs = [9, 9]            # 只有两个节点特征输入
 fixed_idx = [0]              # 固定索引 0 (R), 生成索引 1 (P)
@@ -113,15 +137,15 @@ def load_and_adapt_checkpoint(ckpt_path):
 def main():
     seed_everything(42, workers=True)
     
-    # 1. 初始化模型 (使用新的 2-fragment 配置)
+    # 1. 初始化模型
     ddpm = SBModule(
         model_config=leftnet_config,
         optimizer_config=optimizer_config,
         training_config=training_config,
-        node_nfs=node_nfs,          # [9, 9]
+        node_nfs=node_nfs,          
         edge_nf=0,
         condition_nf=1,
-        fragment_names=fragment_names, # ["R", "P"]
+        fragment_names=fragment_names, 
         pos_dim=3,
         update_pocket_coords=True,
         condition_time=True,
@@ -133,22 +157,25 @@ def main():
         precision=1e-5,
         loss_type="l2",
         pos_only=True,
-        process_type="TS1x",
+        
+        # 【关键配置】加载方式和采样参数
+        process_type="TS1x",         # 必须显式指定，否则找 .npz
+        power=0.5,                   # 必须显式指定为 0.5 (匹配预训练权重)
+        ot_ode=True,                 # 开启确定性生成
+        
         model=LEFTNet,
         enforce_same_encoding=None,
-        scales=[1., 1.],            # 对应 R, P
-        fixed_idx=fixed_idx,        # [0]
+        scales=[1., 1.],            
+        fixed_idx=fixed_idx,        
         eval_epochs=1,
-        mapping=mapping,            # "R->P"
-        mapping_initial=mapping_initial, # "R"
+        mapping=mapping,            
+        mapping_initial=mapping_initial, 
         nfe=25,
         beta_max=0.3,
-        ot_ode=True,
-        power=0.5,
         inv_power=1,
         sigma=0.,
         ts_guess=None,
-        idx=idx                     # 1 (生成 P)
+        idx=idx                     
     )
     
     # 2. 加载经过“手术”的权重
@@ -169,33 +196,48 @@ def main():
     )
     
     callbacks = [
-        EarlyStopping(monitor="val_ep_scaled_err", patience=200, verbose=True),
+        EarlyStopping(monitor="val_ep_scaled_err", patience=50, verbose=True), # patience 可以适当调大
         ModelCheckpoint(
             monitor="val_ep_scaled_err",
             dirpath="checkpoint/R2P_Finetune/",
             filename="r2p-{epoch:03d}-{val_ep_scaled_err:.4f}",
-            save_top_k=3
+            save_top_k=3,
+            mode="min"
         ),
-        LearningRateMonitor(logging_interval='step')
+        LearningRateMonitor(logging_interval='step'),
+
+        # === [新增这一行] ===
+        PrintMetricsCallback(),
+        # ==================
     ]
     
     if training_config["ema"]:
         callbacks.append(EMACallback(pl_module=ddpm, decay=training_config["ema_decay"]))
 
     trainer = Trainer(
-        max_epochs=1000, # 微调不需要太久
+        max_epochs=500, # 全量微调建议跑久一点
         accelerator="gpu",
-        devices=[0], # 假设使用单卡，多卡需调整
+        devices=[0], 
         strategy="auto",
         callbacks=callbacks,
         logger=wandb_logger,
         gradient_clip_val=training_config["gradient_clip_val"],
-        limit_train_batches=1.0, 
-        limit_val_batches=1.0,
+        
+        # 【关键配置】提高验证效率，每 5 个 Epoch 验证一次
+        check_val_every_n_epoch=5,
+        
+        # 移除 debug 用的 limit 参数，跑全量数据
+        # limit_train_batches=1.0, 
+        # limit_val_batches=1.0,
+        # === 【关键修改】添加梯度累积 ===
+        # 因为 bz 改成了 4，这里累积 8 次，相当于有效 Batch Size = 32
+        # 这样既不会爆显存，又能保证梯度的稳定性
+        accumulate_grad_batches=8,
+        # ============================
     )
 
     # 4. 开始训练
-    print("\n🚀 开始 R->P 任务微调...")
+    print("\n🚀 开始 R->P 任务全量微调...")
     trainer.fit(ddpm)
 
 if __name__ == "__main__":
