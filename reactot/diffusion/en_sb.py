@@ -341,6 +341,12 @@ class EnSB(nn.Module):
 
         # Neural net prediction.
         cond = conditions["condition"] if self.ts_guess else conditions
+        
+        # 🕵️ 安插监控：检查传给神经网络的坐标 xt 是否已经坏了
+        if torch.isnan(xt).any():
+            print("\n🚨 [监控报警] 传入 EGNN 的 xt 已经包含 NaN！")
+            print(f"timestep: {timestep}, x0_nan: {torch.isnan(x0).any()}, x1_nan: {torch.isnan(x1).any()}")
+
         net_eps_xh, _ = self.dynamics(
             xh=xh_t,
             edge_index=edge_index,
@@ -356,12 +362,26 @@ class EnSB(nn.Module):
 
         loss = F.mse_loss(pred, label)
         scaled_err = compute_scaled_err(pred, label)
+        
+        #LYY
+        # ===== 🌟 我们新增的神仙代码：计算预测坐标并反归一化 =====
+        # 1. 用大模型的预测值 (pred)，反推出它心目中的物理坐标 (pred_x0)
+        pred_x0 = self.compute_pred_x0(timestep.squeeze(), xt, pred)
+        
+        # 2. 因为模型内部的数据被缩放过，我们必须把它还原成真实的物理尺度 (埃)
+        pred_x0_unnorm = self.normalizer.unnormalize(pred_x0, ind=0)
+        # ======================================================
+        
+        # 2. 直接把它挂在类的属性里！(框架拦截不了属性)
+        self.current_pred_pos = pred_x0_unnorm
 
         loss_terms = {
             "loss": loss,
             "scaled_err": scaled_err,
             "pred": pred,
             "label": label,
+            # 🌟 把带有梯度的真实物理坐标扔出去！#LYY
+            #"pred_pos_unnorm": pred_x0_unnorm,
         }
         return loss_terms
 

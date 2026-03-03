@@ -193,6 +193,28 @@ class EGNNDynamics(BaseDynamics):
             distance_vectors=distance_vectors,
         )
         vel = pos_final - pos
+        
+        '''
+        # ==========================================================
+        # 🚨 我们自己安插的终极监控探头！
+        # ==========================================================
+        if torch.any(torch.isnan(vel)) or torch.any(torch.isnan(pos_final)):
+            print("\n" + "🔥"*20)
+            print("🚨 抓到现行犯了！在 egnn_dynamics.py 中检测到 NaN！")
+            print(f"输入 pos 是否含 NaN: {torch.isnan(pos).any()}")
+            print(f"输出 pos_final 是否含 NaN: {torch.isnan(pos_final).any()}")
+            print(f"输出 h_final 是否含 NaN: {torch.isnan(h_final).any()}")
+            print("🔥"*20 + "\n")
+
+            # 🔪 核心杀招：绝对不用 randn 掩盖！直接抛出致命异常！
+            # 这样就会立刻触发 PyTorch 的 set_detect_anomaly，打印出整个计算图的罪魁祸首！
+            raise RuntimeError("EGNN内部前向传播算出了NaN！立刻触发追踪器！")
+        # ==========================================================
+
+        '''
+
+
+        
         if torch.any(torch.isnan(vel)):
             print("Warning: detected nan in pos, resetting EGNN output to randn.")
             vel = torch.randn_like(vel)

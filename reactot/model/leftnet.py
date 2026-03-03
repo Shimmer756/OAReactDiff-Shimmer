@@ -693,12 +693,14 @@ class LEFTNet(torch.nn.Module):
         dist = (pos[i] - pos[j]).pow(2).sum(dim=-1).sqrt()
         coord_diff = pos[i] - pos[j]
         radial = torch.sum((coord_diff) ** 2, 1).unsqueeze(1)
-        coord_cross = torch.cross(pos[i], pos[j])
+        #LYY:coord_cross = torch.cross(pos[i], pos[j], dim=-1)
+        coord_cross = torch.linalg.cross(pos[i], pos[j], dim=-1)
         norm = torch.sqrt(radial) + EPS
         coord_diff = coord_diff / norm
         cross_norm = (torch.sqrt(torch.sum((coord_cross) ** 2, 1).unsqueeze(1))) + EPS
         coord_cross = coord_cross / cross_norm
-        coord_vertical = torch.cross(coord_diff, coord_cross)
+        #LYY coord_vertical = torch.cross(coord_diff, coord_cross)
+        coord_vertical = torch.linalg.cross(coord_diff, coord_cross, dim=-1)
 
         return dist, coord_diff, coord_cross, coord_vertical
 
@@ -770,9 +772,11 @@ class LEFTNet(torch.nn.Module):
             coord_diff = distance_vectors
             dist = distance_vectors.norm(dim=-1)
             coord_diff= coord_diff / (dist.unsqueeze(1) + EPS)
-            coord_cross = torch.cross(pos[i], pos[j])
+            #coord_cross = torch.cross(pos[i], pos[j])
+            coord_cross = torch.linalg.cross(pos[i], pos[j], dim=-1)
             coord_cross = coord_cross / ((torch.sqrt(torch.sum((coord_cross) ** 2, 1).unsqueeze(1))) + EPS)
-            coord_vertical = torch.cross(coord_diff, coord_cross)
+            #coord_vertical = torch.cross(coord_diff, coord_cross)
+            coord_vertical = torch.linalg.cross(coord_diff, coord_cross, dim=-1)
 
         dist = dist * all_edge_masks.squeeze(-1)
         coord_diff = coord_diff * all_edge_masks
@@ -832,12 +836,14 @@ class LEFTNet(torch.nn.Module):
         x1 = (a - b) / (
             (torch.sqrt(torch.sum((a - b) ** 2, 1).unsqueeze(1))) + EPS
         )
-        y1 = torch.cross(a, b)
+        #LYY y1 = torch.cross(a, b)
+        y1 = torch.linalg.cross(a, b, dim=-1)
         normy = (torch.sqrt(torch.sum(y1**2, 1).unsqueeze(1))) + EPS
         y1 = y1 / normy
         # assert torch.trace(torch.matmul(x1, torch.transpose(y1, 0, 1))) < EPS  # for debugging
 
-        z1 = torch.cross(x1, y1)
+        #z1 = torch.cross(x1, y1)
+        z1 = torch.linalg.cross(x1, y1, dim=-1)
         nodeframe = torch.cat(
             (x1.unsqueeze(-1), y1.unsqueeze(-1), z1.unsqueeze(-1)), dim=-1
         )

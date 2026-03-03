@@ -1,4 +1,7 @@
 import torch
+# 开启全局 NaN 追踪器！一旦产生 NaN，立刻报错并定位到具体代码行！
+torch.autograd.set_detect_anomaly(True)
+
 import copy
 from uuid import uuid4
 from pytorch_lightning import Trainer, seed_everything
@@ -10,6 +13,10 @@ from pytorch_lightning import Callback ##LYY
 from reactot.trainer.pl_trainer import SBModule, DDPMModule
 from reactot.trainer.ema import EMACallback
 from reactot.model import LEFTNet
+
+#LYY
+from reactot.dynamics.xmace_potential import XMACEPotential
+
 
 
 class PrintMetricsCallback(Callback):
@@ -67,18 +74,19 @@ training_config = dict(
     bz=4,  # 如果显存够大，可以尝试调大到 32 或 64
     num_workers=0, # 服务器上建议开启多进程读取 (例如 4 或 8)
     clip_grad=True,
-    gradient_clip_val=None,
+    gradient_clip_val=1.0,
     ema=True,
     ema_decay=0.999,
     swapping_react_prod=False, # R->P 是有方向的，必须关闭交换
     append_frag=False,
-    use_by_ind=True,
+    use_by_ind=False,
     reflection=False,
     single_frag_only=False,
     only_ts=False,
     lr_schedule_type=None,
     use_sampler=True,
-    sampler_config=dict(max_num=2800, mode="node^2", shuffle=True, ddp=False)
+    #sampler_config=dict(max_num=2800, mode="node^2", shuffle=True, ddp=False),
+    sampler_config=dict(max_num=15000, mode="node^2", shuffle=True, ddp=False)
 )
 
 # === 针对 R->P 任务的配置 ===
@@ -94,6 +102,7 @@ mapping_initial = "R"        # 初始状态设为 R
 # 预训练权重路径
 checkpoint_path = "reactot-pretrained.ckpt" 
 
+#LYY_2
 # === 2. 权重加载与“手术”函数 ===
 def load_and_adapt_checkpoint(ckpt_path):
     print(f"🔧 正在加载并适配预训练权重: {ckpt_path}")
@@ -133,10 +142,103 @@ def load_and_adapt_checkpoint(ckpt_path):
             
     return new_state_dict
 
+
+# ... 之前的代码 (如 load_and_adapt_checkpoint 函数) ...
+
+# === 这一段是你需要新增进去的代码 ===
+class PhysicsInformedSBModule(SBModule):
+    def __init__(self, mace_model_path, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.physics_engine = XMACEPotential(mace_model_path=mace_model_path)
+        self.phys_weight = 0.01  # 初始物理权重不要设太大，防止破坏几何结构
+        # 【新增这一行】：从传入的参数中抓取 idx，如果没传默认设为 1 (代表 P 态)
+        self.idx = kwargs.get("idx", 1)
+
+    def training_step(self, batch, batch_idx):
+        # 1. 跑原始的几何流匹配，拿到 geo_loss
+        loss_dict = super().training_step(batch, batch_idx)
+        # 🌟 绕开原作者花里胡哨的父类，直捣黄龙只算 Loss！绝对不抽样！
+        #loss_dict = self.compute_loss(batch)
+        geo_loss = loss_dict["loss"]
+            
+
+        try:
+            # 2. 从流匹配过程中，拿到当前目标分子 P 的坐标图 (React-OT 格式)
+            #target_dict = batch[0][self.idx]
+            # 2. 🌟 从流匹配黑盒里，拿出大模型【预测出来的、带有梯度的】坐标！
+            #pred_pos = loss_dict["pred_pos_unnorm"]
+            
+            # 2. 🌟 绕开 loss_dict！直接去模型本体身上拿坐标！
+            pred_pos = self.ddpm.current_pred_pos
+
+            # 3. 🌟 浅拷贝一份真实的 target_dict，狸猫换太子！
+            # 把原本没有梯度的死坐标，换成我们带有梯度的预测坐标！
+            target_dict = dict(batch[0][self.idx])
+            target_dict["pos"] = pred_pos  # 核心替换！计算图在这里接通！
+
+            # 4. 让 X-MACE 算一算当前构型的 S0-S1 能量差打分
+            phys_ae, _ , gap_mean = self.physics_engine.forward_energy_only(target_dict)
+            #phys_loss = torch.mean(phys_ae)
+            # ====================================================
+            # 🎯 拨乱反正！我们要优化的是 Gap 趋近于 0，而不是绝对能量！
+            # ====================================================
+            phys_loss = gap_mean 
+
+            # ====================================================
+            # 🛡️ 物理防爆盾开始 (专治原子重叠导致的梯度爆炸)
+            # ====================================================
+            # 盾1：拔毒！如果是 NaN 或者 Inf，强行变成 0，彻底切断毒药传播！
+            #phys_loss = torch.nan_to_num(phys_loss, nan=0.0, posinf=0.0, neginf=0.0)
+            # 盾2：限流！就算不是 NaN，万一数值高达几千万，也强行把它压到 10 以内！
+            #phys_loss = torch.clamp(phys_loss, min=-10.0, max=10.0)
+            # ====================================================
+            # 🛡️ 物理防爆盾
+            if torch.isnan(phys_loss) or torch.isinf(phys_loss):
+                # 如果物理引擎没算出来，就不提供物理反馈
+                phys_loss = torch.tensor(0.0, device=geo_loss.device, requires_grad=True)
+            else:
+                # 哪怕初期模型瞎猜导致 Gap 高达 20 eV，我们也强制把惩罚截断在 5.0 以内
+                # 这样物理梯度会非常温和地把分子往 Gap=0 的方向拉，绝对不会拉崩！
+                phys_loss = torch.clamp(phys_loss, min=0.0, max=5.0)
+
+            # 4. 联合 Loss
+            total_loss = geo_loss + self.phys_weight * phys_loss
+            
+            # 打印日志到 Wandb / 进度条
+            self.log("geo_loss", geo_loss, prog_bar=True)
+            self.log("phys_loss", phys_loss, prog_bar=True)
+            # 【核心修改】把能量差显示在进度条上，这就是你找 MECI 的核心指标！
+            self.log("S1_S0_gap", gap_mean, prog_bar=True)
+
+            return total_loss
+              
+        except Exception as e:
+            # === 新增以下两行来显示完整报错轨迹 ===
+            import traceback
+            traceback.print_exc()
+            # 如果因为数据解析发生意外，回退到只算结构 Loss 以防训练崩溃
+            print(f"⚠️ 物理引擎遇到错误: {e}，回退至纯结构 Loss。")
+            return geo_loss
+        
+        '''
+        # 打印一下 loss_dict 里到底有什么，这决定了我们下一步怎么接物理引擎！
+        if batch_idx == 0:
+            print("🔍 挖掘模型内部输出:", loss_dict.keys())
+
+        self.log("geo_loss", geo_loss, prog_bar=True)
+
+        # 🛑 强制提前交卷！不跑任何 MACE 代码！
+        return geo_loss
+        '''
+# ====================================
+
+
+
 # === 3. 主训练流程 ===
 def main():
     seed_everything(42, workers=True)
     
+    '''
     # 1. 初始化模型
     ddpm = SBModule(
         model_config=leftnet_config,
@@ -177,7 +279,53 @@ def main():
         ts_guess=None,
         idx=idx                     
     )
-    
+    '''
+    # === 原本的 ddpm = SBModule(...) 替换为下面这整段 ===
+    ddpm = PhysicsInformedSBModule(
+        # 【新增】这里传入你的 X-MACE 模型路径
+        mace_model_path="/root/X-MACE_2/energies_forces_meci_500.model", 
+        
+        # 以下全部保留原本的参数，不要动
+        model_config=leftnet_config,
+        optimizer_config=optimizer_config,
+        training_config=training_config,
+        node_nfs=node_nfs,          
+        edge_nf=0,
+        condition_nf=1,
+        fragment_names=fragment_names, 
+        pos_dim=3,
+        update_pocket_coords=True,
+        condition_time=True,
+        edge_cutoff=None,
+        norm_values=(1., 1., 1.),
+        norm_biases=(0., 0., 0.),
+        noise_schedule="cosine",
+        timesteps=3000,
+        precision=1e-5,
+        loss_type="l2",
+        pos_only=True,
+        
+        process_type="TS1x",         
+        power=0.5,                   
+        ot_ode=True,                 
+        
+        model=LEFTNet,
+        enforce_same_encoding=None,
+        scales=[1., 1.],            
+        fixed_idx=fixed_idx,        
+        eval_epochs=1,
+        mapping=mapping,            
+        mapping_initial=mapping_initial, 
+        nfe=25,
+        beta_max=0.3,
+        inv_power=1,
+        sigma=0.,
+        ts_guess=None,
+        idx=idx                     
+    )
+    # ====================================================
+
+
     # 2. 加载经过“手术”的权重
     adapted_state_dict = load_and_adapt_checkpoint(checkpoint_path)
     missing, unexpected = ddpm.load_state_dict(adapted_state_dict, strict=False)
@@ -196,13 +344,19 @@ def main():
     )
     
     callbacks = [
-        EarlyStopping(monitor="val_ep_scaled_err", patience=50, verbose=True), # patience 可以适当调大
+        #EarlyStopping(monitor="val_ep_scaled_err", patience=50, verbose=True), # patience 可以适当调大
         ModelCheckpoint(
-            monitor="val_ep_scaled_err",
+            #monitor="val_ep_scaled_err",
+            monitor="epoch",
             dirpath="checkpoint/R2P_Finetune/",
-            filename="r2p-{epoch:03d}-{val_ep_scaled_err:.4f}",
+            #filename="r2p-{epoch:03d}-{val_ep_scaled_err:.4f}",
+            filename="meci-finetune-{epoch:03d}",
+            every_n_epochs=1,
             save_top_k=3,
-            mode="min"
+            #mode="min",
+            mode="max",
+            save_last=True,
+            save_on_train_epoch_end=True
         ),
         LearningRateMonitor(logging_interval='step'),
 
@@ -219,12 +373,14 @@ def main():
         accelerator="gpu",
         devices=[0], 
         strategy="auto",
+        # 👇【必须加上这一行】：强制使用 32 位浮点数，拒绝 FP16 的精度下溢！
+        precision="32-true",
         callbacks=callbacks,
         logger=wandb_logger,
         gradient_clip_val=training_config["gradient_clip_val"],
         
         # 【关键配置】提高验证效率，每 5 个 Epoch 验证一次
-        check_val_every_n_epoch=5,
+        check_val_every_n_epoch=500,
         
         # 移除 debug 用的 limit 参数，跑全量数据
         # limit_train_batches=1.0, 

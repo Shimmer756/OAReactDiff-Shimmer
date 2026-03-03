@@ -176,12 +176,12 @@ class DDPMModule(LightningModule):
         ft = FILE_TYPE[self.process_type]
         if stage == "fit":
             self.train_dataset = func(
-                Path(self.training_config["datadir"], f"train_rpsb_all{ft}"),
+                Path(self.training_config["datadir"], f"train_rpsb_filtered_25{ft}"),
                 **self.training_config,
             )
             self.training_config["reflection"] = False  # Turn off reflection in val.
             self.val_dataset = func(
-                Path(self.training_config["datadir"], f"valid_rpsb_all{ft}"),
+                Path(self.training_config["datadir"], f"valid_rpsb_filtered_25{ft}"),
                 **self.training_config,
             )
         elif stage == "test":
@@ -905,7 +905,7 @@ class SBModule(LightningModule):
             self.train_dataset = func(
                 Path(
                     self.training_config["datadir"],
-                    f"train_rpsb_all{ft}",  # for transition1x
+                    f"train_rpsb_filtered_25{ft}",  # for transition1x
                     # f"train_xtb{ft}",  # RGD1 and RGD1-xtb
                 ),
                 # device=device,
@@ -915,7 +915,7 @@ class SBModule(LightningModule):
             self.val_dataset = func(
                 Path(
                     self.training_config["datadir"],
-                    f"valid_rpsb_all{ft}",  # for transition1x
+                    f"valid_rpsb_filtered_25{ft}",  # for transition1x
                     # f"valid_xtb{ft}",  # RGD1 and RGD1-xtb
                 ),
                 # device=device,
@@ -926,7 +926,7 @@ class SBModule(LightningModule):
             val_dataset_no_swap = func(
                 Path(
                     self.training_config["datadir"],
-                    f"valid_rpsb_all{ft}",  # for transition1x
+                    f"valid_rpsb_filtered_25{ft}",  # for transition1x
                     # f"valid_xtb{ft}",  # RGD1 and RGD1-xtb
                 ),
                 device=device,
@@ -1220,7 +1220,7 @@ class SBModule(LightningModule):
 
         # === [关键] 清空列表释放内存 ===
         self.train_step_outputs.clear()
-
+    '''
     def configure_gradient_clipping(
         self,
         optimizer,
@@ -1252,6 +1252,7 @@ class SBModule(LightningModule):
         if float(grad_norm) > max_grad_norm and self.local_rank == 0:
             print(f'Clipped gradient with value {grad_norm:.1f} '
                   f'while allowed {max_grad_norm:.1f}')
+    '''
 
     @torch.no_grad()
     def eval_rmsd(
