@@ -184,17 +184,7 @@ class PhysicsInformedSBModule(SBModule):
             # ====================================================
             phys_loss = gap_mean 
 
-            # ====================================================
-            # 🛡️ 物理防爆盾开始 (专治原子重叠导致的梯度爆炸)
-            # ====================================================
-            # 盾1：拔毒！如果是 NaN 或者 Inf，强行变成 0，彻底切断毒药传播！
-            #phys_loss = torch.nan_to_num(phys_loss, nan=0.0, posinf=0.0, neginf=0.0)
-            # 盾2：限流！就算不是 NaN，万一数值高达几千万，也强行把它压到 10 以内！
-            #phys_loss = torch.clamp(phys_loss, min=-10.0, max=10.0)
-            # ====================================================
-            # 🛡️ 物理防爆盾
             if torch.isnan(phys_loss) or torch.isinf(phys_loss):
-                # 如果物理引擎没算出来，就不提供物理反馈
                 phys_loss = torch.tensor(0.0, device=geo_loss.device, requires_grad=True)
             else:
                 # 哪怕初期模型瞎猜导致 Gap 高达 20 eV，我们也强制把惩罚截断在 5.0 以内
@@ -220,16 +210,6 @@ class PhysicsInformedSBModule(SBModule):
             print(f"⚠️ 物理引擎遇到错误: {e}，回退至纯结构 Loss。")
             return geo_loss
         
-        '''
-        # 打印一下 loss_dict 里到底有什么，这决定了我们下一步怎么接物理引擎！
-        if batch_idx == 0:
-            print("🔍 挖掘模型内部输出:", loss_dict.keys())
-
-        self.log("geo_loss", geo_loss, prog_bar=True)
-
-        # 🛑 强制提前交卷！不跑任何 MACE 代码！
-        return geo_loss
-        '''
 # ====================================
 
 
@@ -238,48 +218,6 @@ class PhysicsInformedSBModule(SBModule):
 def main():
     seed_everything(42, workers=True)
     
-    '''
-    # 1. 初始化模型
-    ddpm = SBModule(
-        model_config=leftnet_config,
-        optimizer_config=optimizer_config,
-        training_config=training_config,
-        node_nfs=node_nfs,          
-        edge_nf=0,
-        condition_nf=1,
-        fragment_names=fragment_names, 
-        pos_dim=3,
-        update_pocket_coords=True,
-        condition_time=True,
-        edge_cutoff=None,
-        norm_values=(1., 1., 1.),
-        norm_biases=(0., 0., 0.),
-        noise_schedule="cosine",
-        timesteps=3000,
-        precision=1e-5,
-        loss_type="l2",
-        pos_only=True,
-        
-        # 【关键配置】加载方式和采样参数
-        process_type="TS1x",         # 必须显式指定，否则找 .npz
-        power=0.5,                   # 必须显式指定为 0.5 (匹配预训练权重)
-        ot_ode=True,                 # 开启确定性生成
-        
-        model=LEFTNet,
-        enforce_same_encoding=None,
-        scales=[1., 1.],            
-        fixed_idx=fixed_idx,        
-        eval_epochs=1,
-        mapping=mapping,            
-        mapping_initial=mapping_initial, 
-        nfe=25,
-        beta_max=0.3,
-        inv_power=1,
-        sigma=0.,
-        ts_guess=None,
-        idx=idx                     
-    )
-    '''
     # === 原本的 ddpm = SBModule(...) 替换为下面这整段 ===
     ddpm = PhysicsInformedSBModule(
         # 【新增】这里传入你的 X-MACE 模型路径
