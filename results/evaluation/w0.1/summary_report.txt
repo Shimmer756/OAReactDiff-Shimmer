@@ -1,0 +1,5 @@
+Weight Tag: w0.1
+Checkpoint: checkpoint/R2P_Finetune/w0.1/last.ckpt
+Mean Gap: 0.113288 eV
+Median Gap: 0.043665 eV
+Mean RMSD: 0.174618 A
