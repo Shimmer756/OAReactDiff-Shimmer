@@ -1,8 +1,3 @@
-这份新的 `README.md` 采用了标准的学术开源项目格式，重点突出了你最近在 **物理权重平衡（Physics Weight Trade-off）** 上的实验突破。它不仅能让导师一眼看到你的进展，也能提升整个 GitHub 仓库的专业度。
-
-### 📄 新的 README.md 内容建议
-
-```markdown
 # Physics-Informed Diffusion Models for MECI Search
 
 本项目致力于利用基于 X-MACE 势能面的生成式扩散模型，实现光化学反应中最低能量锥形交叉（MECI）点的精确搜索。
@@ -13,7 +8,9 @@
 
 1. **训练阶段 (Training)**: 引入物理正则化项 $L_{phys} = |E_{S_1} - E_{S_0}|$，赋予模型关于势能面简并性的先验知识。
 2. **采样阶段 (Inference)**: 利用增强能量描述符（Augmented Energy, $AE$）产生显式引导力 $\vec{F}_{phys} = -\nabla_{\vec{R}} AE$。
+   
    $$AE(\vec{R}) = \alpha \cdot (E_{S_1} - E_{S_0})^2 + \beta \cdot E_{S_1}$$
+   
    该公式驱动构型在简并缝隙（Crossing Seam）上向局部极小值收敛。
 
 ## 📊 实验基准测试 (Benchmark Results)
@@ -32,12 +29,4 @@
 使用自动化评估脚本进行批量采样与物理性质计算：
 
 ```bash
-python eval_batch_valid.py
-
-```
-
-*该脚本支持基于 `phys_w` 标签的结果自动隔离保存。*
-
-```
-
----
+python eval_valid_all.py
