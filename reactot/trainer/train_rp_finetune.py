@@ -147,10 +147,10 @@ def load_and_adapt_checkpoint(ckpt_path):
 
 # === 这一段是你需要新增进去的代码 ===
 class PhysicsInformedSBModule(SBModule):
-    def __init__(self, mace_model_path, *args, **kwargs):
+    def __init__(self, mace_model_path, phys_weight=0.01 , *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.physics_engine = XMACEPotential(mace_model_path=mace_model_path)
-        self.phys_weight = 0.01  # 初始物理权重不要设太大，防止破坏几何结构
+        self.phys_weight = phys_weight  
         # 【新增这一行】：从传入的参数中抓取 idx，如果没传默认设为 1 (代表 P 态)
         self.idx = kwargs.get("idx", 1)
 
@@ -217,11 +217,15 @@ class PhysicsInformedSBModule(SBModule):
 # === 3. 主训练流程 ===
 def main():
     seed_everything(42, workers=True)
-    
+    current_w = 0.2 
+    w_tag = f"w{current_w}" # 自动生成标签
+
+
     # === 原本的 ddpm = SBModule(...) 替换为下面这整段 ===
     ddpm = PhysicsInformedSBModule(
         # 【新增】这里传入你的 X-MACE 模型路径
-        mace_model_path="/root/X-MACE_2/energies_forces_meci_500.model", 
+        mace_model_path="/root/X-MACE_2/meci_energies_forces.model", 
+        phys_weight = current_w,  
         
         # 以下全部保留原本的参数，不要动
         model_config=leftnet_config,
@@ -281,33 +285,41 @@ def main():
         log_model=False
     )
     
-    callbacks = [
-        #EarlyStopping(monitor="val_ep_scaled_err", patience=50, verbose=True), # patience 可以适当调大
-        ModelCheckpoint(
-            #monitor="val_ep_scaled_err",
-            monitor="epoch",
-            dirpath="checkpoint/R2P_Finetune/",
-            #filename="r2p-{epoch:03d}-{val_ep_scaled_err:.4f}",
-            filename="meci-finetune-{epoch:03d}",
-            every_n_epochs=1,
-            save_top_k=3,
-            #mode="min",
-            mode="max",
-            save_last=True,
-            save_on_train_epoch_end=True
-        ),
-        LearningRateMonitor(logging_interval='step'),
+    # 1. 监控几何精度的 Checkpoint (加了 every_n_epochs=1)
+    checkpoint_geo = ModelCheckpoint(
+        monitor="geo_loss",
+        dirpath=f"checkpoint/R2P_Finetune/{w_tag}/",
+        filename=f"best-geo-{w_tag}-" + "{epoch:03d}-{geo_loss:.4f}",
+        save_top_k=3,
+        mode="min",
+        every_n_epochs=1,    # 🌟 显式指定：每一轮结束都进行评估和保存检查
+        save_last=True,      # 只需要在其中一个里面设置即可
+        save_on_train_epoch_end=True
+    )
 
-        # === [新增这一行] ===
+    # 2. 监控物理能隙 (Gap) 的 Checkpoint (加了 every_n_epochs=1)
+    checkpoint_phys = ModelCheckpoint(
+        monitor="S1_S0_gap",
+        dirpath=f"checkpoint/R2P_Finetune/{w_tag}/",
+        filename=f"best-phys-{w_tag}-" + "{epoch:03d}-{S1_S0_gap:.4f}",
+        save_top_k=3,
+        mode="min",
+        every_n_epochs=1,    # 🌟 显式指定：每一轮结束都进行评估和保存检查
+        save_on_train_epoch_end=True
+    )
+
+    callbacks = [
+        checkpoint_geo,
+        checkpoint_phys,
+        LearningRateMonitor(logging_interval='step'),
         PrintMetricsCallback(),
-        # ==================
     ]
-    
+
     if training_config["ema"]:
         callbacks.append(EMACallback(pl_module=ddpm, decay=training_config["ema_decay"]))
 
     trainer = Trainer(
-        max_epochs=500, # 全量微调建议跑久一点
+        max_epochs=200, # 全量微调建议跑久一点
         accelerator="gpu",
         devices=[0], 
         strategy="auto",
@@ -318,7 +330,7 @@ def main():
         gradient_clip_val=training_config["gradient_clip_val"],
         
         # 【关键配置】提高验证效率，每 5 个 Epoch 验证一次
-        check_val_every_n_epoch=500,
+        check_val_every_n_epoch=5,
         
         # 移除 debug 用的 limit 参数，跑全量数据
         # limit_train_batches=1.0, 

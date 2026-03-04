@@ -68,7 +68,7 @@ def calculate_rmsd(pos1, pos2):
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     xyz_path = "molecule.xyz"
-    ckpt_path = "checkpoint/R2P_Finetune/last-v1.ckpt"
+    ckpt_path = "checkpoint/R2P_Finetune/last.ckpt"
     mace_model_path = "/root/X-MACE_2/meci_energies_forces.model"
 
     print(f"🚀 使用设备: {device}")
