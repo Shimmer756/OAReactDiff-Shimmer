@@ -363,16 +363,9 @@ class EnSB(nn.Module):
         loss = F.mse_loss(pred, label)
         scaled_err = compute_scaled_err(pred, label)
         
-        #LYY
-        # ===== 🌟 我们新增的神仙代码：计算预测坐标并反归一化 =====
-        # 1. 用大模型的预测值 (pred)，反推出它心目中的物理坐标 (pred_x0)
         pred_x0 = self.compute_pred_x0(timestep.squeeze(), xt, pred)
         
-        # 2. 因为模型内部的数据被缩放过，我们必须把它还原成真实的物理尺度 (埃)
         pred_x0_unnorm = self.normalizer.unnormalize(pred_x0, ind=0)
-        # ======================================================
-        
-        # 2. 直接把它挂在类的属性里！(框架拦截不了属性)
         self.current_pred_pos = pred_x0_unnorm
 
         loss_terms = {
@@ -380,8 +373,6 @@ class EnSB(nn.Module):
             "scaled_err": scaled_err,
             "pred": pred,
             "label": label,
-            # 🌟 把带有梯度的真实物理坐标扔出去！#LYY
-            #"pred_pos_unnorm": pred_x0_unnorm,
         }
         return loss_terms
 
@@ -396,13 +387,9 @@ class EnSB(nn.Module):
 
         mu_x0, mu_xn, var = compute_gaussian_product_coef(std_nprev, std_delta)
 
-        # alpha_n = self.alphas[n]
-        # mu_x0, mu_xn, var = compute_gaussian_product_coef(alpha_n)
-
         xt_prev = mu_x0 * x0 + mu_xn * x_n
         if not ot_ode and nprev > 0: # TODO
             xt_prev = xt_prev + var.sqrt() * torch.randn_like(xt_prev)
-        # print(nprev, n, not ot_ode and nprev > 0)
         return xt_prev
 
 
@@ -451,15 +438,10 @@ class EnSB(nn.Module):
         assert torch.allclose(self.schedule.betas[:-1], self.schedule.betas[1:])
         beta = self.schedule.betas[0] * self.T
 
-        # nfe = 0
         def f(t, xt):
             # return (xt - x0) / t
             tt = t.repeat(t_size).reshape(-1, 1).to(xt)
             net_out = net_out_fn(xt, tt) # = (X_t - X_0) / sigma_t
-            # nonlocal nfe
-            # nfe += 1
-
-            # sigma = torch.sqrt(beta * t)
             sigma_div_t = torch.sqrt(beta / t)
             return net_out * sigma_div_t
 
@@ -477,16 +459,11 @@ class EnSB(nn.Module):
             )
             xt = ode_out[-1]
 
-            # print("step", step)
-
             if cog_mask is not None:
                 xt = utils.remove_mean_batch(xt, cog_mask)
 
             if step in log_steps or prev_step == 0:
                 xs.append(xt.detach().cpu())
-                # pred_x0s.append(pred_x0.detach().cpu())
-
-        # print(nfe)
 
         stack_bwd_traj = lambda z: torch.flip(torch.stack(z, dim=1), dims=(1,))
         return stack_bwd_traj(xs), stack_bwd_traj(xs)
@@ -495,14 +472,10 @@ class EnSB(nn.Module):
     def sample(self, x1, representations, conditions,
                clip_denoise=True, nfe=None, log_count=10, verbose=False, ot_ode=True):
 
-        # create discrete time steps that split [0, INTERVAL] into NFE sub-intervals.
-        # e.g., if NFE=2 & INTERVAL=1000, then STEPS=[0, 500, 999] and 2 network
-        # evaluations will be invoked, first from 999 to 500, then from 500 to 0.
         nfe = nfe or self.T - 1
         assert 0 < nfe < self.T == len(self.schedule.betas)
         steps = utils.space_indices(self.T, nfe + 1)
 
-        # create log steps
         log_count = min(len(steps)-1, log_count)
         log_steps = [steps[i] for i in utils.space_indices(len(steps)-1, log_count)]
         assert log_steps[0] == 0
@@ -526,19 +499,8 @@ class EnSB(nn.Module):
         ]
 
         def net_out_fn(xt, t):
+            # 1. 基础准备：将当前坐标 xt 放入 xh_t 容器中
             xh_t[self.idx][:, : self.pos_dim] = xt
-
-            # --- use x1_t for everything ---
-            # xh_t[0][:, : self.pos_dim] = xt
-            # xh_t[2][:, : self.pos_dim] = xt
-
-            # ---- ts_guess to R/P ---
-            # print("cond[r_pos]: ", cond["r_pos"].shape)
-            # print("x1: ", x1.shape)
-            # xt_r = self.q_sample(timestep, cond["r_pos"], x1, ot_ode=ot_ode, mask=cond["ts_mask"])
-            # xt_p = self.q_sample(timestep, cond["p_pos"], x1, ot_ode=ot_ode, mask=cond["ts_mask"])
-            # xh_t[0][:, : self.pos_dim] = xt_r.to(xt.device)
-            # xh_t[2][:, : self.pos_dim] = xt_p.to(xt.device)
 
             _cond = conditions["condition"] if self.ts_guess else conditions
             net_eps_xh, _ = self.dynamics(
@@ -550,7 +512,47 @@ class EnSB(nn.Module):
                 combined_mask=combined_mask,
                 edge_attr=None,  # TODO: no edge_attr is considered now
             )
-            return net_eps_xh[self.idx][:, :self.pos_dim]
+
+            # 提取目标分子当前的几何输出
+            geo_out = net_eps_xh[self.idx][:, :self.pos_dim]
+
+            # ==========================================================
+            # 🌟 终极安全锁：必须同时满足有权重，且挂载了 physics_engine，才进物理引擎！
+            # 这样在 train_rp_finetune.py 的 Sanity Check 里就不会崩溃了。
+            # ==========================================================
+            if hasattr(self, 'phys_weight') and self.phys_weight > 0.0 and hasattr(self, 'physics_engine'):
+
+                # 2. 坐标还原：把扩散潜空间的坐标映射回真实的埃 (Å) 空间
+                xt_physical = self.normalizer.unnormalize(xt, ind=0)
+                target_dict = dict(representations[self.idx])
+
+                #   注意：一定要加 .clone().requires_grad_(True)，否则 MACE 算力会报错
+                target_dict["pos"] = xt_physical.detach().clone().requires_grad_(True)
+
+                # 3. 获取物理梯度
+                _, phys_forces, _ = self.physics_engine.forward_autograd(target_dict)
+
+                # 4. 异常值清理
+                phys_forces = torch.nan_to_num(phys_forces, nan=0.0, posinf=0.0, neginf=0.0)
+
+                # 5. 动态向量归一化 (L2 Norm)
+                geo_norm = torch.norm(geo_out, p=2, dim=-1, keepdim=True) + 1e-8
+                phys_norm = torch.norm(phys_forces, p=2, dim=-1, keepdim=True) + 1e-8
+
+                # 强行剥离物理力原本的“大小”，只保留“方向”，并将其尺度拉伸至与几何流场相同
+                phys_forces_scaled = (phys_forces / phys_norm) * geo_norm
+
+                # 6. 后验融合计算
+                # 这里的 self.phys_weight 就是控制物理干预强度的核心杠杆
+                total_out = geo_out - self.phys_weight * phys_forces_scaled
+
+                return total_out
+
+            # ==========================================================
+            # 🏃 纯净流场出口：训练阶段，或者没开物理引导时，直接返回网络预测
+            # ==========================================================
+            return geo_out
+            #return net_eps_xh[self.idx][:, :self.pos_dim]
 
         def pred_x0_fn(xt, step):
             step = torch.full(

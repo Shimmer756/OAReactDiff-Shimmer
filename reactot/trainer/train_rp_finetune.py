@@ -182,7 +182,11 @@ class PhysicsInformedSBModule(SBModule):
             # ====================================================
             # 🎯 拨乱反正！我们要优化的是 Gap 趋近于 0，而不是绝对能量！
             # ====================================================
-            phys_loss = gap_mean 
+            
+            #phys_loss = gap_mean 
+            
+            #做个2次方
+            phys_loss = gap_mean ** 2
 
             if torch.isnan(phys_loss) or torch.isinf(phys_loss):
                 phys_loss = torch.tensor(0.0, device=geo_loss.device, requires_grad=True)
@@ -217,17 +221,15 @@ class PhysicsInformedSBModule(SBModule):
 # === 3. 主训练流程 ===
 def main():
     seed_everything(42, workers=True)
-    current_w = 0.2 
+    current_w = 0
     w_tag = f"w{current_w}" # 自动生成标签
 
 
     # === 原本的 ddpm = SBModule(...) 替换为下面这整段 ===
     ddpm = PhysicsInformedSBModule(
-        # 【新增】这里传入你的 X-MACE 模型路径
         mace_model_path="/root/X-MACE_2/meci_energies_forces.model", 
         phys_weight = current_w,  
         
-        # 以下全部保留原本的参数，不要动
         model_config=leftnet_config,
         optimizer_config=optimizer_config,
         training_config=training_config,
@@ -332,9 +334,6 @@ def main():
         # 【关键配置】提高验证效率，每 5 个 Epoch 验证一次
         check_val_every_n_epoch=5,
         
-        # 移除 debug 用的 limit 参数，跑全量数据
-        # limit_train_batches=1.0, 
-        # limit_val_batches=1.0,
         # === 【关键修改】添加梯度累积 ===
         # 因为 bz 改成了 4，这里累积 8 次，相当于有效 Batch Size = 32
         # 这样既不会爆显存，又能保证梯度的稳定性

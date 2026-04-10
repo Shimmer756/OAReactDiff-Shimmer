@@ -7,7 +7,6 @@ from mace.calculators import MACECalculator
 from scipy.spatial.transform import Rotation
 from reactot.trainer.train_rp_finetune import PhysicsInformedSBModule
 
-# 1. 确保在 main 函数外面定义这个类
 class OPT:
     def __init__(self):
         self.solver = "ddpm"
@@ -23,13 +22,13 @@ def calculate_rmsd(pos1, pos2):
     return np.sqrt(np.mean(np.sum((p1_aligned - p2_centered) ** 2, axis=1)))
 
 def main():
-    phys_w = 0.01 
+    phys_w = 0.4
     w_tag = f"w{phys_w}"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    ckpt_path = f"checkpoint/R2P_Finetune/{w_tag}/last.ckpt"
+    ckpt_path = f"checkpoint/R2P_Finetune/{w_tag}/best-geo-w0.4-epoch=104-geo_loss=0.0164.ckpt"
     mace_model_path = "/root/X-MACE_2/meci_energies_forces.model"
-    data_path = "reactot/data_meci/valid_rpsb_filtered_25.pkl"
+    data_path = "reactot/data_meci/valid_rpsb_filtered_30.pkl"
     
     # 🌟 自动生成结果保存目录
     save_dir = f"results/evaluation/{w_tag}"
@@ -51,6 +50,13 @@ def main():
     
     # 🌟 关键：必须加上这一行，否则模型不知道用什么 solver 采样
     model.ddpm.opt = OPT()
+    
+    # ==========================================================
+    # 🌟 终极物理连线：强行把老板（model）的物理引擎和权重，塞给干活的司机（ddpm）！
+    # ==========================================================
+    model.ddpm.physics_engine = model.physics_engine
+    model.ddpm.phys_weight = model.phys_weight
+    # ==========================================================
 
     # 2. 加载验证集数据
     with open(data_path, 'rb') as f:
@@ -90,8 +96,9 @@ def main():
         try:
             with torch.no_grad():
                 # 采样
-                sample_out = model.ddpm.sample(x1_full, [repre_R, repre_P], conditions, ot_ode=True, nfe=500, log_count=50)
-                trajectories = sample_out[1].detach().cpu()
+                sample_out = model.ddpm.sample(x1_full, [repre_R, repre_P], conditions, ot_ode=True, nfe=50, log_count=10)
+                #trajectories = sample_out[1].detach().cpu()
+                trajectories = sample_out[0].detach().cpu()
 
             # 寻找物理最优帧
             mol_best_gap = float('inf')

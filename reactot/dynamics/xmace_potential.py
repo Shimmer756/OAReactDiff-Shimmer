@@ -4,11 +4,10 @@ from torch.autograd import grad
 from ase import Atoms
 import numpy as np
 
-# 导入 MACE 核心数据处理模块
 from mace.data.atomic_data import AtomicData
 from mace.data.utils import config_from_atoms
 from mace.tools.torch_geometric.batch import Batch as MaceBatch
-# 【新增】：导入 utils 用于生成 z_table
+
 from mace.tools import utils 
 
 class XMACEPotential(nn.Module):
@@ -30,7 +29,6 @@ class XMACEPotential(nn.Module):
         for param in self.mace_model.parameters():
             param.requires_grad = False
 
-        # 【核心修复】：手动根据模型的 atomic_numbers 生成 z_table 和提取 r_max
         self.z_table = utils.AtomicNumberTable([int(z) for z in self.mace_model.atomic_numbers])
         self.r_max = float(self.mace_model.r_max.cpu())
 
@@ -52,32 +50,30 @@ class XMACEPotential(nn.Module):
             config = config_from_atoms(atoms)
             atomic_data = AtomicData.from_config(
                 config, 
-                z_table=self.z_table,  # 使用我们刚刚生成的 z_table
-                cutoff=self.r_max      # 使用提取的 r_max
+                z_table=self.z_table,
+                cutoff=self.r_max      
             )
             mace_data_list.append(atomic_data)
 
         mace_batch = MaceBatch.from_data_list(mace_data_list).to(self.device)
-        # 【关键】：保留 PyTorch 梯度
         mace_batch.positions = input_dict["pos"] 
         return mace_batch.to_dict()
 
     @torch.enable_grad()
     def forward_autograd(self, input_dict, conditions=None):
-        """预测能量，并算出引导 MECI 的力"""
+        print("🚨 警报：底层正在调用实时物理梯度！")
         input_dict["pos"].requires_grad_(True)
         
         mace_dict = self._build_mace_batch(input_dict)
         out = self.mace_model(mace_dict)
         
-        # 从字典中提取能量
         energies = out['energy']
         e_s0 = energies[:, 0]
         e_s1 = energies[:, 1]
 
-        # 惩罚项计算
         gap_penalty = self.alpha * torch.pow(e_s1 - e_s0, 2)
         min_penalty = self.beta * e_s1
+        '''
         ae = gap_penalty + min_penalty
 
         forces = -grad(
@@ -86,30 +82,78 @@ class XMACEPotential(nn.Module):
             create_graph=self.training
         )[0]
         
-        # 【新增】：计算一下批次的平均能量差，方便监控
         gap_mean = torch.mean(torch.abs(e_s1 - e_s0))
+        '''
+
+       # 1. 计算 Gap 梯度 (目标：垂直走向交叉缝合面)
+       
+        # retain_graph=True 确保计算图在第一次反向传播后不被销毁
+        grad_gap = grad(
+            outputs=torch.sum(gap_penalty),
+            inputs=input_dict["pos"],
+            create_graph=self.training,
+            retain_graph=True 
+        )[0]
+
+        # 2. 计算 S1 极小化梯度 (目标：顺着势能面向下走)
+        grad_s1 = grad(
+            outputs=torch.sum(min_penalty),
+            inputs=input_dict["pos"],
+            create_graph=self.training
+        )[0]
+
+        # 3. 梯度正交化 (Gram-Schmidt Projection)
+        # 从 grad_s1 中剔除掉所有与 grad_gap 平行的分量，防止它们打架
+        dot_product = torch.sum(grad_s1 * grad_gap)
+        norm_sq = torch.sum(grad_gap * grad_gap) + 1e-8
+        grad_s1_orthogonal = grad_s1 - (dot_product / norm_sq) * grad_gap
+
+        # 4. 向量合成 (负号代表梯度的反方向，即力的方向)
+        forces = - (grad_gap + grad_s1_orthogonal)
+
+        # 5. 提取标量供日志记录
+        ae = gap_penalty + min_penalty
+        gap_mean = torch.mean(torch.abs(e_s1 - e_s0))  
+
+        try:
+            # 取平均向量长度 (Norm) 来代表这股力的平均强度
+            mag_gap = torch.norm(grad_gap, dim=-1).mean().item()
+            mag_s1 = torch.norm(grad_s1, dim=-1).mean().item()
+            mag_ortho = torch.norm(grad_s1_orthogonal, dim=-1).mean().item()
+            mag_final = torch.norm(forces, dim=-1).mean().item()
+            
+            # 计算投影系数
+            proj_coef = (dot_product / norm_sq).item()
+            
+            print(f"\n--- 🔬 物理引擎底层监控 ---")
+            print(f"⚡ S0能量: {e_s0.mean().item():.3f} eV | S1能量: {e_s1.mean().item():.3f} eV | Gap: {gap_mean.item():.3f} eV")
+            print(f"🧲 引力对决 (平均梯度长度):")
+            print(f"   ▶ Gap 闭合引力 (grad_gap):    {mag_gap:.6f}")
+            print(f"   ▶ S1  下降引力 (grad_s1):     {mag_s1:.6f}")
+            print(f"📐 正交化手术:")
+            print(f"   ▶ 投影系数 (重合度):          {proj_coef:.6f}")
+            print(f"   ▶ 切除平行分量后的 S1 引力:   {mag_ortho:.6f}")
+            print(f"🚀 最终输出给 ODE 的物理推力:    {mag_final:.6f}")
+            print(f"---------------------------")
+        except Exception as e:
+            print(f"监控打印出错: {e}")
+        # ====================================================
 
         return ae.squeeze(), forces, gap_mean
 
-    # 【我们新增的救命函数：只算能量，绝对不碰二阶导数】
     def forward_energy_only(self, input_dict, conditions=None):
         """只预测能量和Gap，避免显式计算受力导致的二阶导数爆炸"""
-        # 直接构建 MACE 数据，因为传入的 pos 已经自带扩散模型的梯度，不需要再 requires_grad_
         mace_dict = self._build_mace_batch(input_dict)
         out = self.mace_model(mace_dict)
 
-        # 从字典中提取能量
         energies = out['energy']
         e_s0 = energies[:, 0]
         e_s1 = energies[:, 1]
 
-        # 惩罚项计算 (这个就是我们需要的物理 Loss)
         gap_penalty = self.alpha * torch.pow(e_s1 - e_s0, 2)
         min_penalty = self.beta * e_s1
         ae = gap_penalty + min_penalty
 
-        # 计算平均能量差，方便监控
         gap_mean = torch.mean(torch.abs(e_s1 - e_s0))
 
-        # 中间的 force 直接返回 None，不计算！
         return ae.squeeze(), None, gap_mean
