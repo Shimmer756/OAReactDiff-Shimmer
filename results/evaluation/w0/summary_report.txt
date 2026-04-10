@@ -1,5 +1,0 @@
-Weight Tag: w0
-Checkpoint: checkpoint/R2P_Finetune/w0/best-geo-w0-epoch=104-geo_loss=0.0130.ckpt
-Mean Gap: 0.447841 eV
-Median Gap: 0.418804 eV
-Mean RMSD: 0.162518 A
