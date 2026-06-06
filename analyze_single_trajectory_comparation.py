@@ -37,7 +37,7 @@ def main():
     target_index = 41  # 分析的分子索引
     phys_w = 0.1      # 权重
     w_tag = f"w{phys_w}"
-    nfe_steps = 50     # 采样步数
+    nfe_steps = 200     # 采样步数
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

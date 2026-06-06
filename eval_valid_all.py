@@ -22,16 +22,16 @@ def calculate_rmsd(pos1, pos2):
     return np.sqrt(np.mean(np.sum((p1_aligned - p2_centered) ** 2, axis=1)))
 
 def main():
-    phys_w = 0.4
+    phys_w = 0.01
     w_tag = f"w{phys_w}"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    ckpt_path = f"checkpoint/R2P_Finetune/{w_tag}/best-geo-w0.4-epoch=104-geo_loss=0.0164.ckpt"
+    ckpt_path = f"checkpoint/R2P_Finetune/{w_tag}/best-geo-w0.01-epoch=104-geo_loss=0.0131.ckpt"
     mace_model_path = "/root/X-MACE_2/meci_energies_forces.model"
     data_path = "reactot/data_meci/valid_rpsb_filtered_30.pkl"
     
     # 🌟 自动生成结果保存目录
-    save_dir = f"results/evaluation/{w_tag}"
+    save_dir = f"results_200/evaluation/{w_tag}"
     os.makedirs(save_dir, exist_ok=True)
     
     if not os.path.exists(ckpt_path):
@@ -96,7 +96,7 @@ def main():
         try:
             with torch.no_grad():
                 # 采样
-                sample_out = model.ddpm.sample(x1_full, [repre_R, repre_P], conditions, ot_ode=True, nfe=50, log_count=10)
+                sample_out = model.ddpm.sample(x1_full, [repre_R, repre_P], conditions, ot_ode=True, nfe=200, log_count=10)
                 #trajectories = sample_out[1].detach().cpu()
                 trajectories = sample_out[0].detach().cpu()
 

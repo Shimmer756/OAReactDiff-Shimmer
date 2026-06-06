@@ -32,3 +32,6 @@ tmp/
 reactot/13131875.zip
 results/
 *.swp
+
+# Generated evaluation outputs
+results*/
